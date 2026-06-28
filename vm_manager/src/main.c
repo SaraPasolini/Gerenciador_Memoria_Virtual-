@@ -1,0 +1,74 @@
+#include <stdio.h>
+#include <stdlib.h>
+
+#include "config.h"
+#include "tlb.h"
+#include "page_table.h"
+#include "memory.h"
+#include "statistics.h"
+
+int main(void)
+{
+    FILE *backing = fopen(BACKING_STORE_PATH, "rb");
+
+    if (backing == NULL) {
+        fprintf(stderr, "Erro: nao foi possivel abrir %s\n", BACKING_STORE_PATH);
+        fprintf(stderr, "Execute antes: cd data && python3 generate_data.py\n");
+        return 1;
+    }
+
+    page_table_init();
+    tlb_init();
+    memory_init(backing);
+    statistics_init();
+
+    int logical_address;
+
+    while (scanf("%d", &logical_address) == 1) {
+        count_address();
+
+        int address_masked = logical_address & 0xFFFF;
+        int page = address_masked / PAGE_SIZE;
+        int offset = address_masked % PAGE_SIZE;
+
+        int frame = tlb_lookup(page);
+
+        if (frame != -1) {
+            count_tlb_hit();
+        } else {
+            frame = page_table_lookup(page);
+
+            if (frame == -1) {
+                count_page_fault();
+
+                frame = handle_page_fault(page);
+
+                if (frame == -1) {
+                    fprintf(stderr,
+                            "Erro: falha ao tratar page fault para pagina %d\n",
+                            page);
+                    fclose(backing);
+                    return 1;
+                }
+            }
+
+            tlb_insert(page, frame);
+        }
+
+        page_table_set_reference(page);
+        page_table_update_aging();
+
+        int physical_address = frame * PAGE_SIZE + offset;
+        int value = read_memory(frame, offset);
+
+        printf("Logical address: %d Physical address: %d Value: %d\n",
+               address_masked,
+               physical_address,
+               value);
+    }
+
+    print_statistics();
+
+    fclose(backing);
+    return 0;
+}
